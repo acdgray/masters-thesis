@@ -1,39 +1,89 @@
-from functools import partial
-from typing import Callable, Optional
+from dataclasses import dataclass
+import os
+from time import perf_counter
+from typing import Callable, Optional, Sequence
 
 import jax
 
 jax.config.update("jax_enable_x64", True)
-
-
 import diffrax
-from jax import jit, vmap
-from jax import Array
+from jax import Array, vmap
 import jax.numpy as jnp
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 
 from sbplite4py.curvilinear.transformations import ramirez_et_al
-from sbplite4py.mesh import CurvilinearMesh3D
-from sbplite4py.ref_elem import LegendreGaussLobatto3D
-from sbplite4py.typing import TwoPointFlux
+from sbplite4py.dissipation import dissipation_local_lax_friedrichs_entropy_variables
 from sbplite4py.equations import Euler3D
 from sbplite4py.equations.euler3d import flux_ismail_roe, residual
-from sbplite4py.utils.odeint import LSERK4, CflStepSizeController
-from sbplite4py.flux_difference import evaluate_flux_derivative_3d
-from sbplite4py.sats.strong import get_strong_form_sats_3d
-from sbplite4py.dissipation import dissipation_local_lax_friedrichs_entropy_variables
+from sbplite4py.flux_difference import evaluate_weak_flux_derivative_3d
+from sbplite4py.mesh import CurvilinearMesh3D
+from sbplite4py.ref_elem import LegendreGaussLobatto3D
+from sbplite4py.sats.weak import get_weak_form_sats_3d
+from sbplite4py.utils.errors import get_least_squares_rate
+from sbplite4py.utils.odeint import CflStepSizeController, LSERK4
+from sbplite4py.utils.figures import Figure
 
 
-# (xyz,t,equation: Euler3D) -> u
 SourceTerm = Callable[[Array, Array, Euler3D], Array]
+StaticArgs = tuple[
+    Euler3D, LegendreGaussLobatto3D, CurvilinearMesh3D, Optional[SourceTerm], bool
+]
 
-# (xyz) -> u
-InitialCondition = Callable[[Array], Array]
 
-StaticArgs = tuple[Euler3D, CurvilinearMesh3D, Optional[SourceTerm], TwoPointFlux, bool]
+def rhs_fn(t: Array, u: Array, args: StaticArgs) -> Array:
+    equation, ref_elem, mesh, source_term_fn, entropy_stable = args
 
-final_time = 1
-equation = Euler3D(gamma=1.4)
+    fx = evaluate_weak_flux_derivative_3d(
+        u, mesh.mt, ref_elem, equation, flux=flux_ismail_roe
+    )
+    du = -fx.sum(-1)
+
+    uf = mesh.get_internal_face_state(u)
+    ufp = mesh.get_external_face_state(uf)
+    fstar = flux_ismail_roe(uf, ufp, equation)
+    sats = get_weak_form_sats_3d(fstar, mesh.mtf, ref_elem, equation)
+    if entropy_stable:
+        diss = dissipation_local_lax_friedrichs_entropy_variables(
+            uf, ufp, mesh.mtf, ref_elem, equation
+        )
+        du = du.at[:, :, :, ref_elem.R[0], ref_elem.R[1], ref_elem.R[2]].add(
+            sats - diss
+        )
+    else:
+        du = du.at[:, :, :, ref_elem.R[0], ref_elem.R[1], ref_elem.R[2]].add(sats)
+
+    # Multiply by inverse mass matrix
+    P = np.expand_dims(ref_elem.P, axis=-1)
+    J = jnp.expand_dims(mesh.mj, axis=-1)
+    du = du / (J * P)
+
+    if source_term_fn is not None:
+        source_term = source_term_fn(mesh.xyz, t, equation)
+        du = du + source_term
+
+    return du
+
+
+def statistics_fn(t: Array, u: Array, args: StaticArgs) -> dict[str, Array]:
+    equation, ref_elem, mesh, _, _ = args
+
+    s = equation.entropy(u)
+    w = equation.conserved_to_entropy(u)
+    du = rhs_fn(t, u, args)
+
+    P = ref_elem.P
+    J = mesh.mj
+    s_int = (J * P * s).sum()
+
+    P = jnp.expand_dims(ref_elem.P, axis=-1)
+    J = jnp.expand_dims(mesh.mj, axis=-1)
+    st_int = (w * J * P * du).sum()
+    u_int = (J * P * u).sum([i for i in range(len(u.shape) - 1)])
+    ut_int = (J * P * du).sum([i for i in range(len(u.shape) - 1)])
+
+    return {"s_int": s_int, "st_int": st_int, "u_int": u_int, "ut_int": ut_int}
 
 
 def manufactured_solution_fn(x: Array, y: Array, z: Array, t: Array) -> Array:
@@ -69,122 +119,49 @@ def initial_condition_fn(xyz: Array):
     return manufactured_solution_fn(*jnp.unstack(xyz, axis=-1), jnp.array(0.0))
 
 
-@partial(jit, static_argnums=2)
-def rhs_fn(t, u, args: StaticArgs):
-    equation, mesh, source_term, two_point_flux_fn, dissipation = args
-
-    # volume terms
-    fx = evaluate_flux_derivative_3d(
-        u, mesh.mt, mesh.mtf, mesh.mj, mesh.ref_elem, equation, flux=two_point_flux_fn
-    )
-    du = -fx.sum(-1)
-
-    # surface terms
-    uf = mesh.get_internal_face_state(u)
-    ufp = mesh.get_external_face_state(uf)
-    f = equation.flux(uf)
-    fstar = two_point_flux_fn(uf, ufp, equation)
-    sats = get_strong_form_sats_3d(f, fstar, mesh.mtf, mesh.mj, mesh.ref_elem, equation)
-
-    if dissipation:
-        d = dissipation_local_lax_friedrichs_entropy_variables(
-            uf, ufp, mesh.mtf, mesh.ref_elem, equation
-        )
-        Pf = jnp.expand_dims(mesh.mjf * mesh.ref_elem.P[mesh.ref_elem.R], axis=-1)
-        # multiply dissipation by inverse mass matrix
-        surface_terms = sats - d / Pf
-
-    else:
-        surface_terms = sats
-
-    R = mesh.ref_elem.R
-    du = du.at[:, :, :, R[0], R[1], R[2]].add(surface_terms)
-
-    if source_term is not None:
-        du = du + source_term(mesh.xyz, t, equation)
-
-    return du
-
-
-@partial(jit, static_argnums=2)
-def statistics_fn(t, u, args: StaticArgs):
-    equation, mesh, _, _, _ = args
-
-    P = jnp.expand_dims(mesh.mj * mesh.ref_elem.P, axis=-1)
-
-    w = equation.conserved_to_entropy(u)
-
-    du = rhs_fn(t, u, args)
-
-    ds = (w * P * du).sum()
-    du = (P * du).sum((0, 1, 2, 3, 4, 5))
-
-    s = equation.entropy(u)
-    s = (P.squeeze() * s).sum()
-
-    u = (P * u).sum((0, 1, 2, 3, 4, 5))
-
-    out = {"u": u, "du": du, "s": s, "ds": ds}
-
-    return out
-
-
-def comp2phys(xyz):
-
-    # maps from [-1, 1]^3 to [0, 3]^3
-    xyz = ramirez_et_al(xyz)
-
-    # Map from [0, 3]^3 back to [-1, 1]^3
-    xyz = 2 / 3 * xyz - 1
-
-    return xyz
-
-
-def _solve(
-    initial_condition: InitialCondition,
-    equation: Euler3D,
-    num_elements: int,
+def solve(
     degree: int,
     final_time: float,
-    CFL: float,
-    two_point_flux_fn: TwoPointFlux = flux_ismail_roe,
-    source_term: Optional[SourceTerm] = None,
-    dissipation: bool = False,
+    num_elements_along_each_axis: int,
+    entropy_stable: bool,
 ) -> tuple[diffrax.Solution, CurvilinearMesh3D]:
-    r"""Solves the periodic 3d compressible Euler equations in the cube :math:`[-1, 1]^3`.
 
-    Args:
-        initial_condiiton (InitialCondition): Initial condition.
-        equation (Euler3D): Equation being solved.
-        num_elements (int): Number of elements along each axis.
-        degree (int): Degree of LGL tensor-product element.
-        final_time (float): Solve until this time.
-        CFL (float): CFL number in :math:`(0, 1)`.
-        two_point_flux_fn (TwoPointFlux): Numerical flux for volume flux and surface flux.
-        source_term (SourceTerm, optional): If provided, add this source term.
-        dissipation (bool): If ``True``, apply entropy-variables interface dissipation.
+    equation = Euler3D(gamma=1.4)
 
-    Returns:
-        tuple[diffrax.Solution, CurvilinearMesh3D]: Solution object containing the numerical solution at the final
-            time and running statistics from the time integration, as well as the mesh used in the solve.
-    """
-    ref_elem = LegendreGaussLobatto3D(degree, indexing="ij")
-    vx = vy = vz = np.linspace(-1, 1, num_elements + 1)
-    mesh = CurvilinearMesh3D(vx, vy, vz, ref_elem, comp2phys, indexing="ij")
+    ref_elem = LegendreGaussLobatto3D(degree=degree, indexing="ij")
+    vx = vy = vz = np.linspace(-1, 1, num_elements_along_each_axis + 1)
+    mapping = lambda xyz: 2 / 3 * ramirez_et_al(xyz) - 1
+    mesh = CurvilinearMesh3D(
+        vx,
+        vy,
+        vz,
+        ref_elem,
+        mapping,
+        periodic=(True, True, True),
+        indexing="ij",
+        metric_terms="thomas-lombard",
+    )
 
-    u0 = initial_condition(mesh.xyz)
-    static_args = (equation, mesh, source_term, two_point_flux_fn, dissipation)
+    u0 = initial_condition_fn(mesh.xyz)
 
-    # call once to raise errors outside of diffrax since those errors are unhelpful
-    _ = rhs_fn(0.0, u0, static_args)
+    _ = rhs_fn(0.0, u0, (equation, ref_elem, mesh, source_term_fn, entropy_stable))
+    _ = statistics_fn(
+        0.0, u0, (equation, ref_elem, mesh, source_term_fn, entropy_stable)
+    )
 
     term = diffrax.ODETerm(rhs_fn)
     solver = LSERK4()
+
+    CFL = 0.1
+    stepsize_controller = CflStepSizeController(
+        cfl=CFL, mesh_size=mesh.h, equation=equation
+    )
 
     final_subsaveat = diffrax.SubSaveAt(t1=True)
     evolving_subsaveat = diffrax.SubSaveAt(
         ts=jnp.linspace(0, final_time, 500), fn=statistics_fn
     )
+    saveat = diffrax.SaveAt(subs=[final_subsaveat, evolving_subsaveat])
 
     solution = diffrax.diffeqsolve(
         term,
@@ -193,39 +170,41 @@ def _solve(
         t1=final_time,
         dt0=None,
         y0=u0,
-        args=static_args,
+        args=(equation, ref_elem, mesh, source_term_fn, entropy_stable),
         max_steps=None,
         progress_meter=diffrax.TqdmProgressMeter(),
-        stepsize_controller=CflStepSizeController(
-            cfl=CFL, mesh_size=mesh.h, equation=equation
-        ),
-        saveat=diffrax.SaveAt(subs=[final_subsaveat, evolving_subsaveat]),
+        stepsize_controller=stepsize_controller,
+        saveat=saveat,
     )
 
     return solution, mesh
 
 
-def solve(
-    N: int, p: int, dissipation: bool
-) -> tuple[diffrax.Solution, CurvilinearMesh3D]:
-    return _solve(
-        initial_condition_fn,
-        equation,
-        num_elements=N,
-        degree=p,
-        final_time=final_time,
-        CFL=0.1,
-        source_term=source_term_fn,
-        dissipation=dissipation,
-    )
-
-
-def compute_error(solution: diffrax.Solution, mesh: CurvilinearMesh3D) -> float:
-    x, y, z = jnp.unstack(mesh.xyz, axis=-1)
+def compute_error(
+    solution: diffrax.Solution, mesh: CurvilinearMesh3D, final_time: float
+) -> float:
+    J = np.expand_dims(mesh.mj, axis=-1)
+    P = np.expand_dims(mesh.ref_elem.P, axis=-1)
 
     u_pred = solution.ys[0][-1]
-    u_exact = manufactured_solution_fn(x, y, z, final_time)
 
-    P = mesh.J * mesh.ref_elem.P
+    u_exact = manufactured_solution_fn(
+        *jnp.unstack(mesh.xyz, axis=-1), jnp.array(final_time)
+    )
 
-    return jnp.sqrt((P[..., None] * (u_exact - u_pred) ** 2).sum()).item()
+    error = jnp.sqrt((J * P * (u_pred - u_exact) ** 2).sum())
+
+    return error.item()
+
+
+def solve_and_compute_error(
+    degree: int,
+    final_time: float,
+    num_elements_along_each_axis: int,
+    entropy_stable: bool,
+) -> float:
+    solution, mesh = solve(
+        degree, final_time, num_elements_along_each_axis, entropy_stable
+    )
+    error = compute_error(solution, mesh, final_time)
+    return error
