@@ -67,11 +67,15 @@ def rhs_fn(t: Array, u: Array, args: StaticArgs) -> Array:
 
 
 def statistics_fn(t: Array, u: Array, args: StaticArgs) -> dict[str, Array]:
-    equation, ref_elem, mesh, _, _ = args
+    equation, ref_elem, mesh, source_term_fn, _ = args
 
     s = equation.entropy(u)
     w = equation.conserved_to_entropy(u)
     du = rhs_fn(t, u, args)
+
+    if source_term_fn is not None:
+        source_term = source_term_fn(mesh.xyz, t, equation)
+        du = du - source_term
 
     P = ref_elem.P
     J = mesh.mj
