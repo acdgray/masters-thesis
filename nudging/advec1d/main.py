@@ -557,7 +557,11 @@ class FigAdvec1dNudgingVsBaselineScheme(Figure):
             ConservativeControl,
             ConservativeAndStableControl,
         ]
-        self.control_names = ["Identity", "Conservative", "Conservative and stable"]
+        self.control_names = [
+            "Weakly Stable",
+            "Conservative",
+            "Conservative & Stable",
+        ]
 
         self.num_samples = 10
         self.noises = 10 ** np.linspace(-4, 0, 50)
@@ -661,7 +665,12 @@ class FigAdvec1dNudgingVsBaselineScheme(Figure):
 
     def plot(self):
         fig, axs = plt.subplots(
-            len(self.meshes), len(self.controls), sharex=True, sharey=True
+            len(self.meshes),
+            len(self.controls),
+            sharex=True,
+            sharey=True,
+            figsize=(9, 10),
+            dpi=200,
         )
 
         # Get minimum and maximum relative errors across all mesh/control
@@ -738,7 +747,9 @@ class FigAdvec1dNudgingVsBaselineScheme(Figure):
         cbar.ax.yaxis.set_major_formatter(ticker.LogFormatterMathtext(base=10.0))
 
         # plt.tight_layout()
-        plt.show()
+        # plt.show()
+
+        plt.savefig("plots/advec1d_nudging_vs_baseline_scheme.jpg")
 
 
 class FigAdvec1dNudgingVsSurrogate(Figure):
@@ -757,7 +768,7 @@ class FigAdvec1dNudgingVsSurrogate(Figure):
             ConservativeControl,
             ConservativeAndStableControl,
         ]
-        self.control_names = ["Identity", "Conservative", "Conservative and stable"]
+        self.control_names = ["Weakly Stable", "Conservative", "Conservative & Stable"]
 
         self.num_samples = 10
         self.noises = 10 ** np.linspace(-4, 0, 50)
@@ -870,7 +881,12 @@ class FigAdvec1dNudgingVsSurrogate(Figure):
 
     def plot(self):
         fig, axs = plt.subplots(
-            len(self.meshes), len(self.controls), sharex=True, sharey=True
+            len(self.meshes),
+            len(self.controls),
+            sharex=True,
+            sharey=True,
+            figsize=(9, 10),
+            dpi=200,
         )
 
         # Get minimum and maximum relative errors across all mesh/control
@@ -948,7 +964,9 @@ class FigAdvec1dNudgingVsSurrogate(Figure):
         cbar.ax.yaxis.set_major_formatter(ticker.LogFormatterMathtext(base=10.0))
 
         # plt.tight_layout()
-        plt.show()
+        # plt.show()
+
+        plt.savefig("plots/advec1d_nudging_vs_surrogate.jpg")
 
 
 class FigAdvec1dNudgingVsBaselinSchemeAndSurrogate(Figure):
@@ -969,7 +987,7 @@ class FigAdvec1dNudgingVsBaselinSchemeAndSurrogate(Figure):
             ConservativeControl,
             ConservativeAndStableControl,
         ]
-        self.control_names = ["Identity", "Conservative", "Conservative and stable"]
+        self.control_names = ["Weakly Stable", "Conservative", "Conservative & Stable"]
 
         self.num_samples = 10
         self.noises = 10 ** np.linspace(-4, 0, 50)
@@ -1082,7 +1100,12 @@ class FigAdvec1dNudgingVsBaselinSchemeAndSurrogate(Figure):
 
     def plot(self):
         fig, axs = plt.subplots(
-            len(self.meshes), len(self.controls), sharex=True, sharey=True
+            len(self.meshes),
+            len(self.controls),
+            sharex=True,
+            sharey=True,
+            figsize=(9, 10),
+            dpi=200,
         )
 
         # Get minimum and maximum relative errors across all mesh/control
@@ -1162,7 +1185,9 @@ class FigAdvec1dNudgingVsBaselinSchemeAndSurrogate(Figure):
         cbar.ax.yaxis.set_major_formatter(ticker.LogFormatterMathtext(base=10.0))
 
         # plt.tight_layout()
-        plt.show()
+        # plt.show()
+
+        plt.savefig("plots/advec1d_nudging_vs_baseline_scheme_and_surrogate.jpg")
 
 
 class FigAdvec1dNudgingErrorConvergence(Figure):
@@ -1179,7 +1204,7 @@ class FigAdvec1dNudgingErrorConvergence(Figure):
         self.control_names = [
             "Weakly Stable",
             "Conservative",
-            "Conservative & Energy-stable",
+            "Conservative & Stable",
         ]
 
         self.num_samples = 10
@@ -1341,28 +1366,28 @@ class FigAdvec1dNudgingErrorConvergence(Figure):
 
 
 if __name__ == "__main__":
-    fig = FigAdvec1dNudgingErrorConvergence(
-        p=3, num_elements=[k for k in range(4, 251) if k % 7 == 0]
-    )
-    fig.generate_data()
-    fig.save_data()
-    fig.load_data()
-    fig.plot()
+    # fig = FigAdvec1dNudgingErrorConvergence(
+    #     p=3, num_elements=[k for k in range(4, 251) if k % 7 == 0]
+    # )
+    # # fig.generate_data()
+    # # fig.save_data()
+    # # fig.load_data()
+    # fig.plot()
 
     fig = FigAdvec1dNudgingVsBaselineScheme()
-    fig.generate_data()
-    fig.save_data()
+    # fig.generate_data()
+    # fig.save_data()
     fig.load_data()
     fig.plot()
 
     fig = FigAdvec1dNudgingVsSurrogate()
-    fig.generate_data()
-    fig.save_data()
+    # fig.generate_data()
+    # fig.save_data()
     fig.load_data()
     fig.plot()
 
     fig = FigAdvec1dNudgingVsBaselinSchemeAndSurrogate()
-    fig.generate_data()
-    fig.save_data()
+    # fig.generate_data()
+    # fig.save_data()
     fig.load_data()
     fig.plot()
