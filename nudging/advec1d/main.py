@@ -1315,7 +1315,14 @@ class FigAdvec1dNudgingErrorConvergence(Figure):
                 self.data["nudging_errors"][i].append(errors)
 
     def plot(self):
-        fig, axs = plt.subplots(1, len(self.controls), sharex=True, sharey=True)
+        fig, axs = plt.subplots(
+            1,
+            len(self.controls),
+            sharex=True,
+            sharey=True,
+            figsize=(15, 5),
+            dpi=200,
+        )
 
         # Add x-axis labels to bottommost row of plots
         for j, _ in enumerate(self.controls):
@@ -1362,32 +1369,34 @@ class FigAdvec1dNudgingErrorConvergence(Figure):
             if j == len(self.controls) - 1:
                 axs[j].legend()
 
-        plt.show()
+        # plt.show()
+
+        plt.savefig("plots/advec1d_nudging_nudging_error_convergence.jpg")
 
 
 if __name__ == "__main__":
-    # fig = FigAdvec1dNudgingErrorConvergence(
-    #     p=3, num_elements=[k for k in range(4, 251) if k % 7 == 0]
-    # )
+    fig = FigAdvec1dNudgingErrorConvergence(
+        p=3, num_elements=[k for k in range(4, 251) if k % 7 == 0]
+    )
+    # fig.generate_data()
+    # fig.save_data()
+    fig.load_data()
+    fig.plot()
+
+    # fig = FigAdvec1dNudgingVsBaselineScheme()
     # # fig.generate_data()
     # # fig.save_data()
-    # # fig.load_data()
+    # fig.load_data()
     # fig.plot()
 
-    fig = FigAdvec1dNudgingVsBaselineScheme()
-    # fig.generate_data()
-    # fig.save_data()
-    fig.load_data()
-    fig.plot()
+    # fig = FigAdvec1dNudgingVsSurrogate()
+    # # fig.generate_data()
+    # # fig.save_data()
+    # fig.load_data()
+    # fig.plot()
 
-    fig = FigAdvec1dNudgingVsSurrogate()
-    # fig.generate_data()
-    # fig.save_data()
-    fig.load_data()
-    fig.plot()
-
-    fig = FigAdvec1dNudgingVsBaselinSchemeAndSurrogate()
-    # fig.generate_data()
-    # fig.save_data()
-    fig.load_data()
-    fig.plot()
+    # fig = FigAdvec1dNudgingVsBaselinSchemeAndSurrogate()
+    # # fig.generate_data()
+    # # fig.save_data()
+    # fig.load_data()
+    # fig.plot()
